@@ -2,7 +2,7 @@ import sys
 import io
 import soundfile as sf
 import math
-from . import logger
+from common import logger
 
 # Whisper backend
 

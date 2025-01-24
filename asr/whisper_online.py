@@ -5,10 +5,10 @@ import librosa
 from functools import lru_cache
 import time
 import logging
+import argparse
 
 from .backend import *
-from . import logger
-from common import STORAGE_DIR_MODEL
+from common import logger, STORAGE_DIR_MODEL
 
 @lru_cache(10**6)
 def load_audio(fname):
@@ -157,7 +157,6 @@ class OnlineASRProcessor:
 
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
-        lang = self.asr.get_language(res)
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         o = self.transcript_buffer.flush()
@@ -403,35 +402,9 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
 WHISPER_LANG_CODES = "af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,es,et,eu,fa,fi,fo,fr,gl,gu,ha,haw,he,hi,hr,ht,hu,hy,id,is,it,ja,jw,ka,kk,km,kn,ko,la,lb,ln,lo,lt,lv,mg,mi,mk,ml,mn,mr,ms,mt,my,ne,nl,nn,no,oc,pa,pl,ps,pt,ro,ru,sa,sd,si,sk,sl,sn,so,sq,sr,su,sv,sw,ta,te,tg,th,tk,tl,tr,tt,uk,ur,uz,vi,yi,yo,zh".split(",")
 
-def create_tokenizer(lan):
-    """returns an object that has split function that works like the one of MosesTokenizer"""
-
-    assert lan in WHISPER_LANG_CODES, "language must be Whisper's supported lang code: " + " ".join(WHISPER_LANG_CODES)
-
-    if lan == "uk":
-        import tokenize_uk
-        class UkrainianTokenizer:
-            def split(self, text):
-                return tokenize_uk.tokenize_sents(text)
-        return UkrainianTokenizer()
-
-    # supported by fast-mosestokenizer
-    if lan in "as bn ca cs de el en es et fi fr ga gu hi hu is it kn lt lv ml mni mr nl or pa pl pt ro ru sk sl sv ta te yue zh".split():
-        from mosestokenizer import MosesTokenizer
-        return MosesTokenizer(lan)
-
-    # the following languages are in Whisper, but not in wtpsplit:
-    if lan in "as ba bo br bs fo haw hr ht jw lb ln lo mi nn oc sa sd sn so su sw tk tl tt".split():
-        logger.debug(f"{lan} code is not supported by wtpsplit. Going to use None lang_code option.")
-        lan = None
-
-    from wtpsplit import WtP
-    # downloads the model from huggingface on the first use
-    wtp = WtP("wtp-canine-s-12l-no-adapters")
-    class WtPtok:
-        def split(self, sent):
-            return wtp.split(sent, lang_code=lan)
-    return WtPtok()
+def create_tokenizer():
+    from wtpsplit import SaT
+    return SaT('sat-3l-sm')
 
 
 def add_shared_args(parser):
@@ -440,7 +413,7 @@ def add_shared_args(parser):
     """
     parser.add_argument('--min-chunk-size', type=float, default=1.0, help='Minimum audio chunk size in seconds. It waits up to this time to do processing. If the processing takes shorter time, it waits, otherwise it processes the whole segment that was received by this time.')
     parser.add_argument('--model', type=str, default='large-v3-turbo', choices="tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo".split(","),help="Name size of the Whisper model to use (default: large-v3-turbo). The model is automatically downloaded from the model hub if not present in model cache dir.")
-    parser.add_argument('--model_cache_dir', type=str, default=STORAGE_DIR_MODEL, help="Overriding the default model cache dir where models downloaded from the hub are saved")
+    parser.add_argument('--model_cache_dir', type=str, default=STORAGE_DIR_MODEL+'/whisper', help="Overriding the default model cache dir where models downloaded from the hub are saved")
     parser.add_argument('--model_dir', type=str, default=None, help="Dir where Whisper model.bin and other files are saved. This option overrides --model and --model_cache_dir parameter.")
     parser.add_argument('--lan', '--language', type=str, default='auto', help="Source language code, e.g. en,de,cs, or 'auto' for language detection.")
     parser.add_argument('--task', type=str, default='transcribe', choices=["transcribe","translate"],help="Transcribe or translate.")
@@ -481,16 +454,9 @@ def asr_factory(args, logfile=sys.stderr):
         logger.info("Setting VAD filter")
         asr.use_vad()
 
-    language = args.lan
-    if args.task == "translate":
-        asr.set_translate_task()
-        tgt_language = "en"  # Whisper translates into English
-    else:
-        tgt_language = language  # Whisper transcribes in this language
-
     # Create the tokenizer
     if args.buffer_trimming == "sentence":
-        tokenizer = create_tokenizer(tgt_language)
+        tokenizer = create_tokenizer()
     else:
         tokenizer = None
 
@@ -510,12 +476,7 @@ def set_logging(args,logger,other="_server"):
     logging.getLogger("whisper_online"+other).setLevel(args.log_level)
 #    logging.getLogger("whisper_online_server").setLevel(args.log_level)
 
-
-def print_transcript(transcript: str, start_timestamp: float, end_timestamp: float, language: str, now: float):
-    print("%1.4f [%s] %1.0f->%1.0f %s" % (now*1000, language, start_timestamp*1000,end_timestamp*1000,transcript),flush=True)
-
-def run(handle_transcript=print_transcript):
-    import argparse
+def create_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('audio_path', type=str, help="Filename of 16kHz mono channel wav, on which live streaming is simulated.")
     add_shared_args(parser)
@@ -523,8 +484,24 @@ def run(handle_transcript=print_transcript):
     parser.add_argument('--offline', action="store_true", default=False, help='Offline mode.')
     parser.add_argument('--comp_unaware', action="store_true", default=False, help='Computationally unaware simulation.')
     
-    args = parser.parse_args()
+    return parser
 
+
+def print_transcript(transcript: str, start_timestamp: float, end_timestamp: float, language: str, now: float):
+    print("%1.4f [%s] %1.0f->%1.0f %s" % (now*1000, language, start_timestamp*1000,end_timestamp*1000,transcript),flush=True)
+
+class TranscriptHandler:
+    def __init__(self):
+        self.asr: OnlineASRProcessor = None
+
+    def init(self, asr: OnlineASRProcessor):
+        self.asr = asr
+
+    def handle(self, transcript: str, start_timestamp: float, end_timestamp: float, now: float):
+        print_transcript(transcript, start_timestamp, end_timestamp, self.asr.get_last_language(), now)
+
+def run(transcript_handler=TranscriptHandler()):
+    args = create_args().parse_args()
     # reset to store stderr to different file stream, e.g. open(os.devnull,"w")
     logfile = sys.stderr
 
@@ -556,6 +533,7 @@ def run(handle_transcript=print_transcript):
     # warm up the ASR because the very first transcribe takes much more time than the other
     asr.transcribe(a)
 
+    transcript_handler.init(online)
     beg = args.start_at
     start = time.time()-beg
 
@@ -571,8 +549,9 @@ def run(handle_transcript=print_transcript):
 
         if o[0] is not None:
             # If there is text, output
-            handle_transcript(o[2], o[0], o[1], online.get_last_language(), now)
+            transcript_handler.handle(o[2], o[0], o[1], now)
 
+    latency = []
     if args.offline: ## offline mode processing (for testing/debugging)
         a = load_audio(audio_path)
         online.insert_audio_chunk(a)
@@ -611,6 +590,7 @@ def run(handle_transcript=print_transcript):
 
     else: # online = simultaneous mode
         end = 0
+        latency = []
         while True:
             now = time.time() - start
             if now < end+min_chunk:
@@ -619,6 +599,7 @@ def run(handle_transcript=print_transcript):
             a = load_audio_chunk(audio_path,beg,end)
             beg = end
             online.insert_audio_chunk(a)
+            ts = time.time() - start
 
             try:
                 o = online.process_iter()
@@ -628,7 +609,7 @@ def run(handle_transcript=print_transcript):
             else:
                 output_transcript(o)
             now = time.time() - start
-            logger.debug(f"## last processed {end:.2f} s, now is {now:.2f}, the latency is {now-end:.2f}")
+            latency.append(now-end)
 
             if end >= duration:
                 break
@@ -636,6 +617,8 @@ def run(handle_transcript=print_transcript):
 
     o = online.finish()
     output_transcript(o, now=now)
+
+    return latency
 
 if __name__ == "__main__":
     run()

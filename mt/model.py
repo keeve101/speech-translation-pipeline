@@ -1,6 +1,7 @@
 import torch
 import gc
-from common import STORAGE_DIR_MODEL
+import time
+from common import logger, STORAGE_DIR_MODEL
 
 from transformers import (
     AutoModelForSeq2SeqLM,
@@ -10,16 +11,20 @@ from .tokenizer import NllbTokenizer
 class Nllb200:
     def __init__(self, model_id: str = "facebook/nllb-200-distilled-600M", device: str = "cpu"):
         self.model_id = model_id
-        self.tokenizers: NllbTokenizer|None = None
-        self.model: AutoModelForSeq2SeqLM|None = None
+        self.tokenizers: NllbTokenizer= None
+        self.model: AutoModelForSeq2SeqLM= None
         self.device = torch.device(device)
 
     def get_model_name(self):
         return self.model_id.split("/")[-1]
 
     def load_model(self):
-        self.tokenizers = NllbTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL)
+        t = time.time()
+        logger.info(f'Loading Nllb200 model ({self.get_model_name()})...')
+        self.tokenizers = NllbTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
+        e = time.time()
+        logger.info(f"done. It took {round(e-t,2)} seconds.")
 
         self.model.to(self.device)
         return self.tokenizers, self.model

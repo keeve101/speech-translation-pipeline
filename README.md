@@ -8,4 +8,5 @@ faster-whisper
 transformers
 torch
 torchaudio
+wtpsplit
 ```

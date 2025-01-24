@@ -1,6 +1,10 @@
+import logging
+
 STORAGE_DIR = "/home/luv/.cache/"
 STORAGE_DIR_MODEL = STORAGE_DIR + "/models"
+STORAGE_DIR_DATA_FLEURS = STORAGE_DIR + "/data/fleurs"
 
+logger = logging.getLogger(__name__)
 
 LANGUAGES = {
     "en": "English",

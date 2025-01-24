@@ -29,8 +29,8 @@ class MmsTts:
         return self.model_id.split("/")[-1]
 
     def load_model(self):
-        self.tokenizer = VitsTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL)
-        self.model = VitsModel.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL)
+        self.tokenizer = VitsTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
+        self.model = VitsModel.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
 
         self.model.to(self.device)
         return self.tokenizer, self.model
