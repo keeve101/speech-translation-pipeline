@@ -1,4 +1,4 @@
-from asr import run as run_asr, logger, TranscriptHandler
+from asr import Runner, logger, TranscriptHandler, create_args
 from asr import create_tokenizer, VACOnlineASRProcessor, OnlineASRProcessor
 
 from mt import Nllb200
@@ -11,13 +11,12 @@ class CascadePipeline(TranscriptHandler):
     == 1: translate per sentence, only translate confirmed transcription
     == 2: translate per sentence, translate confirmed and unconfirmed transcription
 
-    Default is 0
+    Default is 2
     """
     def __init__(self, languages: list[str], translation_setting = 2, device='cuda'):
         super().__init__()
         self.languages = languages
         self.mt_model = Nllb200(device=device)
-        self.mt_model.load_model()
         self.tts_model = Tts(device=device)
         self.translation_setting = translation_setting
 
@@ -26,19 +25,41 @@ class CascadePipeline(TranscriptHandler):
             self.tokenizer = create_tokenizer()
 
         self.last_transcribed_lang = None
+        self.transcription_history = []
+        self.translation_history = []
         self.confirmed_transcription = ''
         self.unconfirmed_transcription = ''
         self.last_transcribed_sentence = ''
         self.confirmed_translation = ''
         self.unconfirmed_translation = ''
 
+    def reset(self):
+        self.last_transcribed_lang = None
+        self.transcription_history = []
+        self.translation_history = []
+        self.confirmed_transcription = ''
+        self.unconfirmed_transcription = ''
+        self.last_transcribed_sentence = ''
+        self.confirmed_translation = ''
+        self.unconfirmed_translation = ''
+        if self.asr is not None:
+            self.asr.reset()
+
     def init(self, asr: OnlineASRProcessor):
         super().init(asr)
+        self.mt_model.load_model()
+
         # Disable TTS for now
         # for l in languages:
         #     self.tts_model.load_lang(l)
 
-    def process_transcribed(self, transcript):
+        self.reset()
+
+    def process_transcribed(self, transcript, src: str):
+        if src != self.last_transcribed_lang and self.last_transcribed_lang is not None:
+            self.transcription_history.append((self.confirmed_transcription, self.last_transcribed_lang))
+            self.confirmed_transcription = ''
+
         self.confirmed_transcription += transcript
 
         online = self.asr.online if isinstance(self.asr, VACOnlineASRProcessor) else self.asr
@@ -48,13 +69,16 @@ class CascadePipeline(TranscriptHandler):
         logger.debug('TODO: ' + self.unconfirmed_transcription)
 
     def process_translation(self, transcript: str, src: str, tgt: str):
-        if src != self.last_transcribed_sentence:
+        if src != self.last_transcribed_lang and self.last_transcribed_lang is not None:
             # Language has changed, translate whatever was confirmed transcribed but not confirmed
             # translated
             self.confirmed_translation += self.mt_model.translate(self.last_transcribed_sentence,source=src, target=tgt)
             # Reset the translation context
             self.last_transcribed_sentence = ''
             logger.debug(' CFM: ' + self.confirmed_translation)
+
+            self.transcription_history.append((self.confirmed_translation, src))
+            self.confirmed_translation = ''
 
         if self.tokenizer is None:
             self.confirmed_translation += self.mt_model.translate(transcript,source=src, target=tgt)
@@ -101,22 +125,40 @@ class CascadePipeline(TranscriptHandler):
         logger.debug('LAST: ' + self.last_transcribed_sentence)
 
     def handle(self, transcript: str, start_timestamp: float, end_timestamp: float, now: float):
-        # TODO consider multiple languages; What about multiple languages for the online asr?
         src = self.asr.get_last_language()
-
-        self.process_transcribed(transcript)
             
         try:
             lang_idx = self.languages.index(src)
             tgt = self.languages[1-lang_idx]
 
+            self.process_transcribed(transcript, src)
             self.process_translation(transcript, src, tgt)
-            self.last_transcribed_sentence = src
+
+            self.last_transcribed_lang = src
         except ValueError:
             logger.debug(f"skipping different language {src}")
 
+    def finish(self):
+        lang_idx = self.languages.index(self.last_transcribed_lang)
+        tgt = self.languages[1-lang_idx]
+
+        self.transcription_history.append([
+            self.confirmed_transcription + self.unconfirmed_transcription, self.last_transcribed_lang
+        ])
+
+        self.translation_history.append([
+            self.confirmed_translation + self.unconfirmed_translation, tgt
+        ])
+
 if __name__ == '__main__':
     pipeline = CascadePipeline(languages=['en', 'hi'])
-    run_asr(pipeline)
-    print(pipeline.confirmed_translation)
-    print('[]', pipeline.unconfirmed_translation)
+
+    runner = Runner(pipeline)
+    runner.init(create_args().parse_args())
+    runner.run()
+    pipeline.finish()
+
+    print(pipeline.transcription_history)
+    print(pipeline.translation_history)
+
+

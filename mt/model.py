@@ -20,6 +20,8 @@ class Nllb200:
 
     def load_model(self):
         t = time.time()
+        if self.model is not None and self.tokenizers is not None:
+            return self.tokenizers, self.model
         logger.info(f'Loading Nllb200 model ({self.get_model_name()})...')
         self.tokenizers = NllbTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
         self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
@@ -40,6 +42,9 @@ class Nllb200:
         gc.collect()
 
     def translate(self, text: str, source: str = "en", target: str = "en", max_length=1000):
+        if len(text) == 0:
+            return ''
+
         if self.tokenizers is None or self.model is None:
             self.load_model()
 

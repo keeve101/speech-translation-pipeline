@@ -1,8 +1,11 @@
 import logging
 
-STORAGE_DIR = "/home/luv/.cache/"
+STORAGE_DIR = "/home/luv/.cache"
 STORAGE_DIR_MODEL = STORAGE_DIR + "/models"
 STORAGE_DIR_DATA_FLEURS = STORAGE_DIR + "/data/fleurs"
+STORAGE_DIR_CONVERSATION_DATA = STORAGE_DIR + '/data/conversation'
+STORAGE_DIR_REDUCED_FLEURS = STORAGE_DIR + '/data/reduced-fleurs'
+STORAGE_DIR_RESULTS = STORAGE_DIR + '/results'
 
 logger = logging.getLogger(__name__)
 
