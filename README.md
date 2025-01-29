@@ -9,4 +9,6 @@ transformers
 torch
 torchaudio
 wtpsplit
+more_itertools
+flash-attn
 ```

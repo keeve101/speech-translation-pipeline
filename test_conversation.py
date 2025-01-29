@@ -3,9 +3,10 @@ from tqdm import tqdm
 from asr import create_args, Runner
 from datasets import Dataset
 from common import STORAGE_DIR_CONVERSATION_DATA, STORAGE_DIR_RESULTS
-from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
+from normalizers import BasicTextNormalizer, EnglishTextNormalizer
 from os import path
 from pathlib import Path
+from itertools import product
 
 import json
 import torch
@@ -55,7 +56,7 @@ def get_normalizers(lang):
 # Define batch size
 batch_size = 32
 
-output_folder = Path(STORAGE_DIR_RESULTS)
+output_folder = Path(STORAGE_DIR_RESULTS) / 'conversation'
 output_folder.mkdir(exist_ok=True)
 
 # Define models
@@ -76,7 +77,9 @@ test_langs = [
     'th',
 ]
 
-translation_setting = 0
+translation_settings = [0, 2]
+
+configs = product(test_langs, translation_settings)
 
 pipeline = CascadePipeline(['en'], device=device)
 runner = Runner(pipeline)
@@ -86,10 +89,14 @@ args.log_level = 'INFO'
 args.file = './jfk.wav'
 runner.init(args)
 
+print('Warming up the models')
+runner.run()
+pipeline.finish()
+
 evaluation_results = {
 }
 
-for lang in test_langs:
+for lang, translation_setting  in configs:
     print('### TESTING LANG:', lang, '###')
 
     pipeline.translation_setting = translation_setting
@@ -102,7 +109,7 @@ for lang in test_langs:
     dataset = Dataset.load_from_disk(path.join(STORAGE_DIR_CONVERSATION_DATA, lang))
 
     for i in tqdm(range(0, len(dataset), batch_size)):
-        batch_output_file_path = output_folder / f'{lang}_batch_{i}.json'
+        batch_output_file_path = output_folder / f'{lang}-{translation_setting}_batch_{i}.json'
 
         # To skip already processed batches
         if batch_output_file_path.exists():
@@ -115,10 +122,10 @@ for lang in test_langs:
         # Predict for batch
         predictions = []
         for sample in tqdm(batch, leave=False):
-            args.audio_path = sample['path']
+            args.file = path.join(STORAGE_DIR_CONVERSATION_DATA, sample[f'{src_lang}_audio_path'])
             runner.init(args)
 
-            runner.run()
+            latency = runner.run()
             pipeline.finish()
 
             truth = ""
@@ -134,23 +141,25 @@ for lang in test_langs:
                     text = n(text)
                 pred += text + '\n'
 
-            predictions.append(
-                {
-                    "id": sample["id"],
-                    "ground_truth": truth.strip(),
-                    "raw_transcription": sample['transcription']
-                    "raw_ground_truth": sample['translation'],
-                    "prediction": pred.strip(),
-                    "raw_prediction": pipeline.translation_history,
-                }
-            )
+            predictions.append({
+                "id": sample["id"],
+                "ground_truth": truth.strip(),
+                "raw_text": sample['transcription'],
+                "raw_ground_truth": sample['translation'],
+                "prediction": pred.strip(),
+                "raw_transcription": pipeline.transcription_history,
+                "raw_prediction": pipeline.translation_history,
+                "latency": sum(latency)/len(latency)
+            })
 
         with open(batch_output_file_path, "w", encoding="utf-8") as f:
             json.dump(predictions, f, indent=4)
 
+print('Evaluating results...')
+for lang, translation_setting  in configs:
     # Combine the batch outputs into a single file
     batch_output_file_paths = glob.glob(
-        str(output_folder / f"{lang}_batch_*.json")
+        str(output_folder / f"{lang}-{translation_setting}_batch_*.json")
     )
 
     all_predictions = []
@@ -160,12 +169,17 @@ for lang in test_langs:
             all_predictions.extend(batch_predictions)
 
     with open(
-        f"{output_folder}/{lang}.json", "w", encoding="utf-8"
+        f"{output_folder}/{lang}-{translation_setting}.json", "w", encoding="utf-8"
     ) as f:
         json.dump(all_predictions, f, indent=4)
 
+    eval_key = f'{lang}_{translation_setting}'
+
     # Evaluate the predictions
-    evaluation_results[lang] = {}
+    evaluation_results[eval_key] = {
+        "translation_setting": translation_setting,
+    }
+    evaluation_results[eval_key]['latency'] = sum(prediction["latency"] for prediction in all_predictions)/len(all_predictions)
     for metric in evaluation_metrics:
         predictions = [prediction["prediction"] for prediction in all_predictions]
         references = [prediction["ground_truth"] for prediction in all_predictions]
@@ -179,7 +193,7 @@ for lang in test_langs:
         results = metric.compute(predictions=predictions, references=references, **kwargs)
 
         # Store results in the dictionary under the corresponding language and metric
-        evaluation_results[lang][metric.name] = results
+        evaluation_results[eval_key][metric.name] = results
 
 # Write the results to a JSON file
 output_file_path = (

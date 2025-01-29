@@ -30,9 +30,10 @@ class MmsTts:
 
     def load_model(self):
         self.tokenizer = VitsTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
-        self.model = VitsModel.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
-
-        self.model.to(self.device)
+        self.model = VitsModel.from_pretrained(
+            self.model_id,
+            cache_dir=STORAGE_DIR_MODEL + '/tts'
+        ).to(self.device).eval()
         return self.tokenizer, self.model
 
     def unload(self):

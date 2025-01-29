@@ -149,7 +149,8 @@ def create_conversation_dataset(lang):
 
             audio_file_path = path.join(audio_base, f'{len(new_rows)}.wav')
             concatenate_audio_files(audio_files, audio_file_path)
-            new_rows.append((row_id, transcription, translation, audio_file_path))
+            new_row.append()
+            new_rows.append((row_id, transcription, translation, path.join('audio', lang, f'{len(new_rows)}.wav')))
 
     dataset = Dataset.from_pandas(DataFrame(new_rows, columns=['id', 'transcription', 'translation', 'path']))
     dataset.save_to_disk(path.join(STORAGE_DIR_CONVERSATION_DATA, lang))
@@ -191,7 +192,7 @@ def create_reduced_fleurs_dataset(lang):
             new_row.append(df_row['raw_transcription'])
             audio_file_path = path.join(audio_base, lang, f'{row.Index}.wav')
             concatenate_audio_files([df_row['path']], audio_file_path)
-            new_row.append(audio_file_path)
+            new_row.append(path.join('audio', lang, f'{row.Index}.wav'))
         new_rows.append(new_row)
 
     dataset = Dataset.from_pandas(DataFrame(new_rows, columns=cols))

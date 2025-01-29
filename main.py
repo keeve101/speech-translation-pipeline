@@ -139,12 +139,15 @@ class CascadePipeline(TranscriptHandler):
             logger.debug(f"skipping different language {src}")
 
     def finish(self):
-        lang_idx = self.languages.index(self.last_transcribed_lang)
-        tgt = self.languages[1-lang_idx]
+        if self.last_transcribed_lang is None:
+            return
 
         self.transcription_history.append([
             self.confirmed_transcription + self.unconfirmed_transcription, self.last_transcribed_lang
         ])
+
+        lang_idx = self.languages.index(self.last_transcribed_lang)
+        tgt = self.languages[1-lang_idx]
 
         self.translation_history.append([
             self.confirmed_translation + self.unconfirmed_translation, tgt

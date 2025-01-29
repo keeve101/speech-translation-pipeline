@@ -10,13 +10,11 @@ import argparse
 from .backend import *
 from common import logger, STORAGE_DIR_MODEL
 
-@lru_cache(1)
 def load_audio(fname):
     a, _ = librosa.load(fname, sr=16000, dtype=np.float32)
     return a
 
-def load_audio_chunk(fname, beg, end):
-    audio = load_audio(fname)
+def load_audio_chunk(audio, beg, end):
     beg_s = int(beg*16000)
     end_s = int(end*16000)
     return audio[beg_s:end_s]
@@ -404,7 +402,7 @@ WHISPER_LANG_CODES = "af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,e
 
 def create_tokenizer():
     from wtpsplit import SaT
-    return SaT('sat-3l-sm')
+    return SaT('sat-3l-sm', ort_providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
 
 
 def add_shared_args(parser):
@@ -506,7 +504,7 @@ class Runner:
         self.transcript_handler = transcript_handler
 
         self.duration = 0
-        self.audio_path = ''
+        self.audio = None
 
         self.asr: OpenaiApiASR | FasterWhisperASR | MLXWhisper | WhisperTimestampedASR = None
         self.online: OnlineASRProcessor | VACOnlineASRProcessor = None
@@ -520,14 +518,14 @@ class Runner:
 
         set_logging(args,logger)
 
-        self.audio_path = args.file
+        self.audio = load_audio(args.file)
 
         SAMPLING_RATE = 16000
-        self.duration = len(load_audio(self.audio_path))/SAMPLING_RATE
-        logger.debug("Audio duration is: %2.2f seconds" % self.duration)
+        self.duration = len(self.audio)/SAMPLING_RATE
+        logger.debug("Audio %s duration is: %2.2f seconds" % (args.file, self.duration))
 
         # load the audio into the LRU cache before we start the timer
-        a = load_audio_chunk(self.audio_path,0,1)
+        a = load_audio_chunk(self.audio,0,1)
 
         if self.asr is None or self.online is None:
             self.asr, self.online = asr_factory(self.args, logfile=self.logfile)
@@ -545,6 +543,9 @@ class Runner:
         beg = self.args.start_at
         start = time.time()-beg
 
+        if self.audio is None:
+            raise Exception('no audio loaded. Make sure to call init')
+
         def output_transcript(o, now=None):
             # output format in stdout is like:
             # 4186.3606 0 1720 Takhle to je
@@ -561,8 +562,7 @@ class Runner:
 
         latency = []
         if self.args.offline: ## offline mode processing (for testing/debugging)
-            a = load_audio(self.audio_path)
-            self.online.insert_audio_chunk(a)
+            self.online.insert_audio_chunk(self.audio)
             try:
                 o = self.online.process_iter()
             except AssertionError as e:
@@ -573,7 +573,7 @@ class Runner:
         elif self.args.comp_unaware:  # computational unaware mode 
             end = beg + min_chunk
             while True:
-                a = load_audio_chunk(self.audio_path,beg,end)
+                a = load_audio_chunk(self.audio,beg,end)
                 self.online.insert_audio_chunk(a)
                 try:
                     o = self.online.process_iter()
@@ -598,16 +598,14 @@ class Runner:
 
         else: # online = simultaneous mode
             end = 0
-            latency = []
             while True:
                 now = time.time() - start
                 if now < end+min_chunk:
                     time.sleep(min_chunk+end-now)
                 end = time.time() - start
-                a = load_audio_chunk(self.audio_path,beg,end)
+                a = load_audio_chunk(self.audio,beg,end)
                 beg = end
                 self.online.insert_audio_chunk(a)
-                ts = time.time() - start
 
                 try:
                     o = self.online.process_iter()
@@ -617,7 +615,7 @@ class Runner:
                 else:
                     output_transcript(o)
                 now = time.time() - start
-                latency.append(now-ts)
+                latency.append(now-end)
 
                 if end >= self.duration:
                     break

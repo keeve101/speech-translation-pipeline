@@ -24,11 +24,15 @@ class Nllb200:
             return self.tokenizers, self.model
         logger.info(f'Loading Nllb200 model ({self.get_model_name()})...')
         self.tokenizers = NllbTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/nllb')
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model_id,
+            cache_dir=STORAGE_DIR_MODEL + '/nllb',
+            torch_dtype=torch.float16,
+            attn_implementation="flash_attention_2",
+        ).to(self.device).eval()
         e = time.time()
         logger.info(f"done. It took {round(e-t,2)} seconds.")
 
-        self.model.to(self.device)
         return self.tokenizers, self.model
 
     def unload(self):
