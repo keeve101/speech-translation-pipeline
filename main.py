@@ -2,7 +2,7 @@ from asr import Runner, logger, TranscriptHandler, create_args
 from asr import create_tokenizer, VACOnlineASRProcessor, OnlineASRProcessor
 
 from mt import Nllb200
-from tts import Tts
+#from tts import Tts
 
 class CascadePipeline(TranscriptHandler):
     """
@@ -17,7 +17,7 @@ class CascadePipeline(TranscriptHandler):
         super().__init__()
         self.languages = languages
         self.mt_model = Nllb200(device=device)
-        self.tts_model = Tts(device=device)
+        # self.tts_model = Tts(device=device)
         self.translation_setting = translation_setting
 
         self.tokenizer = None

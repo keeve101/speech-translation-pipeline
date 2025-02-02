@@ -29,7 +29,7 @@ class MmsTts:
         return self.model_id.split("/")[-1]
 
     def load_model(self):
-        self.tokenizer = VitsTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
+        self.tokenizer = VitsTokenizer.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL + '/tts')
         self.model = VitsModel.from_pretrained(
             self.model_id,
             cache_dir=STORAGE_DIR_MODEL + '/tts'
@@ -51,7 +51,7 @@ class MmsTts:
             self.load_model()
 
         with torch.no_grad():
-            inputs = tokenizer(text, return_tensors="pt").to(self.device)
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
 
             outputs = self.model(inputs['input_ids'])
             return outputs.waveform[0]
