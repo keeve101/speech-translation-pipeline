@@ -25,6 +25,7 @@ class CascadePipeline(TranscriptHandler):
             self.tokenizer = create_tokenizer()
 
         self.last_transcribed_lang = None
+        self.last_confirmed_transcription_timestamp = -1
         self.transcription_history = []
         self.translation_history = []
         self.confirmed_transcription = ''
@@ -63,10 +64,16 @@ class CascadePipeline(TranscriptHandler):
         self.confirmed_transcription += transcript
 
         online = self.asr.online if isinstance(self.asr, VACOnlineASRProcessor) else self.asr
-        self.unconfirmed_transcription = online.to_flush(online.transcript_buffer.buffer)[2]
+        buffer = online.transcript_buffer.buffer
+        i = 0
+        for _, end, _ in buffer:
+            if end > self.last_confirmed_transcription_timestamp:
+                break
+            i += 1
+        self.unconfirmed_transcription = online.to_flush(buffer[i:])[2]
 
-        logger.debug(' CFM: ' + self.confirmed_transcription)
-        logger.debug('TODO: ' + self.unconfirmed_transcription)
+        logger.debug('ASR  CFM: ' + self.confirmed_transcription)
+        logger.debug('ASR TODO: ' + self.unconfirmed_transcription)
 
     def process_translation(self, transcript: str, src: str, tgt: str):
         if src != self.last_transcribed_lang and self.last_transcribed_lang is not None:
@@ -116,27 +123,30 @@ class CascadePipeline(TranscriptHandler):
         if len(uncfm_to_translate) > 0:
             self.unconfirmed_translation = self.mt_model.translate(uncfm_to_translate,source=src, target=tgt)
 
-        logger.debug('TEXT: ' + text)
-        logger.debug('SENT: ' + str(sentences))
-        logger.debug(' CTR: ' + cfm_to_translate)
-        logger.debug('UCTR: ' + uncfm_to_translate)
-        logger.debug(' CFM: ' + self.confirmed_translation)
-        logger.debug('TODO: ' + self.unconfirmed_translation)
-        logger.debug('LAST: ' + self.last_transcribed_sentence)
+        logger.debug(' MT TEXT: ' + text)
+        logger.debug(' MT SENT: ' + str(sentences))
+        logger.debug(' MT  CTR: ' + cfm_to_translate)
+        logger.debug(' MT UCTR: ' + uncfm_to_translate)
+        logger.debug(' MT  CFM: ' + self.confirmed_translation)
+        logger.debug(' MT TODO: ' + self.unconfirmed_translation)
+        logger.debug(' MT LAST: ' + self.last_transcribed_sentence)
 
     def handle(self, transcript: str, start_timestamp: float, end_timestamp: float, now: float):
+        logger.debug('=====================')
         src = self.asr.get_last_language()
             
         try:
             lang_idx = self.languages.index(src)
             tgt = self.languages[1-lang_idx]
 
+            self.last_confirmed_transcription_timestamp = end_timestamp
             self.process_transcribed(transcript, src)
             self.process_translation(transcript, src, tgt)
 
             self.last_transcribed_lang = src
         except ValueError:
             logger.debug(f"skipping different language {src}")
+        logger.debug('=====================')
 
     def finish(self):
         if self.last_transcribed_lang is None:
@@ -159,6 +169,7 @@ if __name__ == '__main__':
     runner = Runner(pipeline)
     runner.init(create_args().parse_args())
     runner.run()
+
     pipeline.finish()
 
     print(pipeline.transcription_history)

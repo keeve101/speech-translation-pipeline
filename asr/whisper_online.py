@@ -2,7 +2,6 @@
 import sys
 import numpy as np
 import librosa
-from functools import lru_cache
 import time
 import logging
 import argparse
@@ -24,7 +23,7 @@ class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
         self.commited_in_buffer = []
-        self.buffer = []
+        self.buffer: list[tuple[float, float, str]] = []
         self.new = []
 
         self.last_commited_time = 0
@@ -229,10 +228,6 @@ class OnlineASRProcessor:
         else:
             logger.debug(f"--- not enough segments to chunk")
 
-
-
-
-
     def chunk_at(self, time):
         """trims the hypothesis and audio buffer at "time"
         """
@@ -278,7 +273,7 @@ class OnlineASRProcessor:
         return f
 
 
-    def to_flush(self, sents, sep=None, offset=0, ):
+    def to_flush(self, sents, sep=None, offset=0):
         # concatenates the timestamped words or sentences into one sequence that is flushed in one line
         # sents: [(beg1, end1, "sentence1"), ...] or [] if empty
         # return: (beg1,end-of-last-sentence,"concatenation of sentences") or (None, None, "") if empty
@@ -305,14 +300,10 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         self.online_chunk_size = online_chunk_size
 
         self.online = OnlineASRProcessor(*a, **kw)
+        from .silero_vad_iterator import FixedVADIterator, OnnxWrapper
 
         # VAC:
-        import torch
-        model, _ = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad'
-        )
-        from silero_vad_iterator import FixedVADIterator
+        model = OnnxWrapper(STORAGE_DIR_MODEL + '/silero-vad/model.onnx')
         self.vac = FixedVADIterator(model)  # we use the default options there: 500ms silence, 100ms padding, etc.  
 
         self.logfile = self.online.logfile
@@ -387,7 +378,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
             ret = self.online.process_iter()
             return ret
         else:
-            print("no online update, only VAD", self.status, file=self.logfile)
+            # print("no online update, only VAD", self.status, file=self.logfile)
             return (None, None, "")
 
     def finish(self):
@@ -416,7 +407,7 @@ def add_shared_args(parser):
     parser.add_argument('--lan', '--language', type=str, default='auto', help="Source language code, e.g. en,de,cs, or 'auto' for language detection.")
     parser.add_argument('--task', type=str, default='transcribe', choices=["transcribe","translate"],help="Transcribe or translate.")
     parser.add_argument('--backend', type=str, default="faster-whisper", choices=["faster-whisper", "whisper_timestamped", "mlx-whisper", "openai-api"],help='Load only this backend for Whisper processing.')
-    parser.add_argument('--vac', action="store_true", default=False, help='Use VAC = voice activity controller. Recommended. Requires torch.')
+    parser.add_argument('--vac', action="store_true", default=False, help='Use VAC = voice activity controller. Recommended.')
     parser.add_argument('--vac-chunk-size', type=float, default=0.04, help='VAC sample size in seconds.')
     parser.add_argument('--vad', action="store_true", default=False, help='Use VAD = voice activity detection, with the default parameters.')
     parser.add_argument('--buffer_trimming', type=str, default="segment", choices=["sentence", "segment"],help='Buffer trimming strategy -- trim completed sentences marked with punctuation mark and detected by sentence segmenter, or the completed segments returned by Whisper. Sentence segmenter must be installed for "sentence" option.')

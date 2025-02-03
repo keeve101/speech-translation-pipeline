@@ -9,7 +9,6 @@ from pathlib import Path
 from itertools import product
 
 import json
-import torch
 import gc
 import glob
 import evaluate
@@ -102,8 +101,6 @@ for lang, translation_setting  in configs:
     pipeline.translation_setting = translation_setting
     pipeline.languages = ['en', lang]
     
-    if device == "cuda":
-        torch.cuda.empty_cache()
     gc.collect()
 
     dataset = Dataset.load_from_disk(path.join(STORAGE_DIR_CONVERSATION_DATA, lang))
