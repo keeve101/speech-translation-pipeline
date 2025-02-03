@@ -86,6 +86,7 @@ runner = Runner(pipeline)
 args = create_args().parse_args()
 args.log_level = 'INFO'
 args.file = './jfk.wav'
+args.vac = True
 
 runner.init(args)
 
