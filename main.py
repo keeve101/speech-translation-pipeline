@@ -118,7 +118,7 @@ class CascadePipeline(TranscriptHandler):
                 last_was_confirmed = False
 
         if len(cfm_to_translate) > 0:
-            self.confirmed_translation += self.mt_model.translate(transcript,source=src, target=tgt)
+            self.confirmed_translation += self.mt_model.translate(cfm_to_translate,source=src, target=tgt)
 
         if len(uncfm_to_translate) > 0:
             self.unconfirmed_translation = self.mt_model.translate(uncfm_to_translate,source=src, target=tgt)
