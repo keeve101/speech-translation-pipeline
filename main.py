@@ -164,13 +164,20 @@ class CascadePipeline(TranscriptHandler):
         ])
 
 if __name__ == '__main__':
+    from mic import AudioCapture
     pipeline = CascadePipeline(languages=['en', 'hi'])
 
     runner = Runner(pipeline)
     runner.init(create_args().parse_args())
-    runner.run()
+    audio_device = AudioCapture(output_audio=lambda a: runner.online.insert_audio_chunk(a))
 
-    pipeline.finish()
+    try:
+        audio_device.start()
+        while True:
+            runner.online.process_iter()
+    except KeyboardInterrupt:
+        audio_device.stop()
+        pipeline.finish()
 
     print(pipeline.transcription_history)
     print(pipeline.translation_history)

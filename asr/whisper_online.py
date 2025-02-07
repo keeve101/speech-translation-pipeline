@@ -509,20 +509,22 @@ class Runner:
 
         set_logging(args,logger)
 
-        self.audio = load_audio(args.file)
+        try:
+            self.audio = load_audio(args.file)
+            SAMPLING_RATE = 16000
+            self.duration = len(self.audio)/SAMPLING_RATE
+            logger.debug("Audio %s duration is: %2.2f seconds" % (args.file, self.duration))
 
-        SAMPLING_RATE = 16000
-        self.duration = len(self.audio)/SAMPLING_RATE
-        logger.debug("Audio %s duration is: %2.2f seconds" % (args.file, self.duration))
-
-        # load the audio into the LRU cache before we start the timer
-        a = load_audio_chunk(self.audio,0,1)
+        except:
+            logger.debug('No loaded audio')
 
         if self.asr is None or self.online is None:
             self.asr, self.online = asr_factory(self.args, logfile=self.logfile)
 
-            # warm up the ASR because the very first transcribe takes much more time than the other
-            self.asr.transcribe(a)
+            if self.audio is not None:
+                # warm up the ASR because the very first transcribe takes much more time than the other
+                a = load_audio_chunk(self.audio,0,1)
+                self.asr.transcribe(a)
 
         self.transcript_handler.init(self.online)
 
