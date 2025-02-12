@@ -288,6 +288,9 @@ class OnlineASRProcessor:
             e = offset + sents[-1][1]
         return (b,e,t)
 
+    def time_since_last_voice(self):
+        return 0.
+
 class VACOnlineASRProcessor(OnlineASRProcessor):
     '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller). 
 
@@ -308,6 +311,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
         self.logfile = self.online.logfile
         self.reset()
+        self.frames_since_last_voice = 0
 
     def get_last_language(self):
         return self.online.get_last_language()
@@ -322,6 +326,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         self.status = None  # or "voice" or "nonvoice"
         self.audio_buffer = np.array([],dtype=np.float32)
         self.buffer_offset = 0  # in frames
+        self.frames_since_last_voice = 0 # in frames
 
     def clear_buffer(self):
         self.buffer_offset += len(self.audio_buffer)
@@ -333,16 +338,21 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         self.audio_buffer = np.append(self.audio_buffer, audio)
 
         if res is not None:
-            frame = list(res.values())[0]-self.buffer_offset
+            if 'end' in res:
+                self.frames_since_last_voice = len(audio) - (res['end']-self.buffer_offset)
+
             if 'start' in res and 'end' not in res:
                 self.status = 'voice'
+                frame = res["start"]-self.buffer_offset
                 send_audio = self.audio_buffer[frame:]
+                self.frames_since_last_voice = 0
                 self.online.reset(offset=(frame+self.buffer_offset)/self.SAMPLING_RATE)
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.clear_buffer()
             elif 'end' in res and 'start' not in res:
                 self.status = 'nonvoice'
+                frame = res["end"]-self.buffer_offset
                 send_audio = self.audio_buffer[:frame]
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
@@ -364,11 +374,15 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
                 self.current_online_chunk_buffer_size += len(self.audio_buffer)
                 self.clear_buffer()
             else:
+                sample_length = max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
+                self.frames_since_last_voice += sample_length
                 # We keep 1 second because VAD may later find start of voice in it.
                 # But we trim it to prevent OOM. 
-                self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
+                self.buffer_offset += sample_length
                 self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
 
+    def time_since_last_voice(self):
+        return float(self.frames_since_last_voice)/float(self.SAMPLING_RATE)
 
     def process_iter(self):
         if self.is_currently_final:
@@ -407,7 +421,7 @@ def add_shared_args(parser):
     parser.add_argument('--lan', '--language', type=str, default='auto', help="Source language code, e.g. en,de,cs, or 'auto' for language detection.")
     parser.add_argument('--task', type=str, default='transcribe', choices=["transcribe","translate"],help="Transcribe or translate.")
     parser.add_argument('--backend', type=str, default="faster-whisper", choices=["faster-whisper", "whisper_timestamped", "mlx-whisper", "openai-api"],help='Load only this backend for Whisper processing.')
-    parser.add_argument('--vac', action="store_true", default=False, help='Use VAC = voice activity controller. Recommended.')
+    parser.add_argument('--vac', action="store_true", const=True, help='Use VAC = voice activity controller. Recommended.')
     parser.add_argument('--vac-chunk-size', type=float, default=0.04, help='VAC sample size in seconds.')
     parser.add_argument('--vad', action="store_true", default=False, help='Use VAD = voice activity detection, with the default parameters.')
     parser.add_argument('--buffer_trimming', type=str, default="segment", choices=["sentence", "segment"],help='Buffer trimming strategy -- trim completed sentences marked with punctuation mark and detected by sentence segmenter, or the completed segments returned by Whisper. Sentence segmenter must be installed for "sentence" option.')
@@ -488,9 +502,12 @@ class TranscriptHandler:
 
     def handle(self, transcript: str, start_timestamp: float, end_timestamp: float, now: float) -> None:
         print_transcript(transcript, start_timestamp, end_timestamp, self.asr.get_last_language(), now)
+    
+    def handle_silence(self):
+        pass
 
 class Runner:
-    def __init__(self, transcript_handler=TranscriptHandler(),logfile=sys.stderr):
+    def __init__(self, transcript_handler=TranscriptHandler(),logfile=sys.stderr, silence_time=-1):
         self.logfile = logfile
         self.transcript_handler = transcript_handler
 
@@ -500,6 +517,8 @@ class Runner:
         self.asr: OpenaiApiASR | FasterWhisperASR | MLXWhisper | WhisperTimestampedASR = None
         self.online: OnlineASRProcessor | VACOnlineASRProcessor = None
         self.args: argparse.Namespace = None
+        self.start = 0
+        self.silence_time = silence_time
 
     def init(self, args: argparse.Namespace):
         self.args = args
@@ -528,53 +547,45 @@ class Runner:
 
         self.transcript_handler.init(self.online)
 
+    def handle_data_chunk(self, a):
+        self.online.insert_audio_chunk(a)
+        self.process_iter()
+
+    def process_iter(self):
+        try:
+            o = self.online.process_iter()
+            self.handle_transcript(o)
+            if self.silence_time > 0 and self.online.time_since_last_voice() > self.silence_time:
+                self.transcript_handler.handle_silence()
+        except AssertionError as e:
+            logger.error(f"assertion error: {e}")
+
+    def handle_transcript(self, o, now=None):
+        if now is None:
+            now = time.time()-self.start
+
+        self.transcript_handler.handle(o[2], o[0], o[1], now)
+
     def run(self):
         if self.args.vac:
             min_chunk = self.args.vac_chunk_size
         else:
             min_chunk = self.args.min_chunk_size
         beg = self.args.start_at
-        start = time.time()-beg
+        self.start = time.time()-beg
 
         if self.audio is None:
             raise Exception('no audio loaded. Make sure to call init')
 
-        def output_transcript(o, now=None):
-            # output format in stdout is like:
-            # 4186.3606 0 1720 Takhle to je
-            # - the first three words are:
-            #    - emission time from beginning of processing, in milliseconds
-            #    - beg and end timestamp of the text segment, as estimated by Whisper model. The timestamps are not accurate, but they're useful anyway
-            # - the next words: segment transcript
-            if now is None:
-                now = time.time()-start
-
-            if o[0] is not None:
-                # If there is text, output
-                self.transcript_handler.handle(o[2], o[0], o[1], now)
-
         latency = []
         if self.args.offline: ## offline mode processing (for testing/debugging)
-            self.online.insert_audio_chunk(self.audio)
-            try:
-                o = self.online.process_iter()
-            except AssertionError as e:
-                logger.error(f"assertion error: {repr(e)}")
-            else:
-                output_transcript(o)
+            self.handle_data_chunk(self.audio)
             now = None
         elif self.args.comp_unaware:  # computational unaware mode 
             end = beg + min_chunk
             while True:
                 a = load_audio_chunk(self.audio,beg,end)
-                self.online.insert_audio_chunk(a)
-                try:
-                    o = self.online.process_iter()
-                except AssertionError as e:
-                    logger.error(f"assertion error: {repr(e)}")
-                    pass
-                else:
-                    output_transcript(o, now=end)
+                self.handle_data_chunk(a)
 
                 logger.debug(f"## last processed {end:.2f}s")
 
@@ -592,22 +603,14 @@ class Runner:
         else: # online = simultaneous mode
             end = 0
             while True:
-                now = time.time() - start
+                now = time.time() - self.start
                 if now < end+min_chunk:
                     time.sleep(min_chunk+end-now)
-                end = time.time() - start
+                end = time.time() - self.start
                 a = load_audio_chunk(self.audio,beg,end)
                 beg = end
-                self.online.insert_audio_chunk(a)
-
-                try:
-                    o = self.online.process_iter()
-                except AssertionError as e:
-                    logger.error(f"assertion error: {e}")
-                    pass
-                else:
-                    output_transcript(o)
-                now = time.time() - start
+                self.handle_data_chunk(a)
+                now = time.time() - self.start
                 latency.append(now-end)
 
                 if end >= self.duration:
@@ -615,7 +618,7 @@ class Runner:
             now = None
 
         o = self.online.finish()
-        output_transcript(o, now=now)
+        self.handle_transcript(o, now=now)
 
         return latency
 

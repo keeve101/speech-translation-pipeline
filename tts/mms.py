@@ -2,11 +2,12 @@ import torch
 import gc
 from transformers import VitsTokenizer, VitsModel
 from common import STORAGE_DIR_MODEL
+from pypinyin import lazy_pinyin, Style
 
 
 model_list = {
     "en": "facebook/mms-tts-eng",
-    # Mandarin (zh) not supported
+    "zh": "BricksDisplay/vits-cmn",
     "id": "facebook/mms-tts-ind",
     "hi": "facebook/mms-tts-hin",
     "ms": "facebook/mms-tts-zlm",
@@ -49,6 +50,9 @@ class MmsTts:
     def synthesize(self, text: str):
         if self.tokenizer is None or self.model is None:
             self.load_model()
+
+        if self.model_id.endswith('cmn'):
+            text = ''.join(lazy_pinyin(text, style=Style.TONE, tone_sandhi=True))
 
         with torch.no_grad():
             inputs = self.tokenizer(text, return_tensors="pt").to(self.device)

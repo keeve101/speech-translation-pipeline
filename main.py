@@ -1,8 +1,9 @@
 from asr import Runner, logger, TranscriptHandler, create_args
 from asr import create_tokenizer, VACOnlineASRProcessor, OnlineASRProcessor
+from uart import Screen
 
 from mt import Nllb200
-#from tts import Tts
+from tts import Tts
 
 class CascadePipeline(TranscriptHandler):
     """
@@ -17,7 +18,7 @@ class CascadePipeline(TranscriptHandler):
         super().__init__()
         self.languages = languages
         self.mt_model = Nllb200(device=device)
-        # self.tts_model = Tts(device=device)
+        self.tts_model = Tts(device=device)
         self.translation_setting = translation_setting
 
         self.tokenizer = None
@@ -33,6 +34,7 @@ class CascadePipeline(TranscriptHandler):
         self.last_transcribed_sentence = ''
         self.confirmed_translation = ''
         self.unconfirmed_translation = ''
+        self.screen = Screen()
 
     def reset(self):
         self.last_transcribed_lang = None
@@ -50,18 +52,18 @@ class CascadePipeline(TranscriptHandler):
         super().init(asr)
         self.mt_model.load_model()
 
-        # Disable TTS for now
-        # for l in languages:
-        #     self.tts_model.load_lang(l)
+        for l in self.languages:
+            self.tts_model.load_lang(l)
 
         self.reset()
 
-    def process_transcribed(self, transcript, src: str):
+    def process_transcribed(self, transcript, src: str, src_speakerid: int):
         if src != self.last_transcribed_lang and self.last_transcribed_lang is not None:
             self.transcription_history.append((self.confirmed_transcription, self.last_transcribed_lang))
             self.confirmed_transcription = ''
 
         self.confirmed_transcription += transcript
+        self.screen.send_text(transcript, src_speakerid, is_translation=False, is_confirmed=True)
 
         online = self.asr.online if isinstance(self.asr, VACOnlineASRProcessor) else self.asr
         buffer = online.transcript_buffer.buffer
@@ -71,15 +73,18 @@ class CascadePipeline(TranscriptHandler):
                 break
             i += 1
         self.unconfirmed_transcription = online.to_flush(buffer[i:])[2]
+        self.screen.send_text(self.unconfirmed_transcription, src_speakerid, is_translation=False, is_confirmed=False)
 
         logger.debug('ASR  CFM: ' + self.confirmed_transcription)
         logger.debug('ASR TODO: ' + self.unconfirmed_transcription)
 
-    def process_translation(self, transcript: str, src: str, tgt: str):
+    def process_translation(self, transcript: str, src: str, tgt: str, tgt_speakerid: int):
         if src != self.last_transcribed_lang and self.last_transcribed_lang is not None:
             # Language has changed, translate whatever was confirmed transcribed but not confirmed
             # translated
-            self.confirmed_translation += self.mt_model.translate(self.last_transcribed_sentence,source=src, target=tgt)
+            cfm_translated = self.mt_model.translate(self.last_transcribed_sentence,source=src, target=tgt)
+            self.confirmed_translation += cfm_translated
+            self.screen.send_text(cfm_translated, tgt_speakerid, is_translation=True, is_confirmed=True)
             # Reset the translation context
             self.last_transcribed_sentence = ''
             logger.debug(' CFM: ' + self.confirmed_translation)
@@ -88,7 +93,9 @@ class CascadePipeline(TranscriptHandler):
             self.confirmed_translation = ''
 
         if self.tokenizer is None:
-            self.confirmed_translation += self.mt_model.translate(transcript,source=src, target=tgt)
+            cfm_translated = self.mt_model.translate(transcript,source=src, target=tgt)
+            self.confirmed_translation += cfm_translated
+            self.screen.send_text(cfm_translated, tgt_speakerid, is_translation=True, is_confirmed=True)
             logger.debug(' CFM: ' + self.confirmed_translation)
             return
 
@@ -118,10 +125,13 @@ class CascadePipeline(TranscriptHandler):
                 last_was_confirmed = False
 
         if len(cfm_to_translate) > 0:
-            self.confirmed_translation += self.mt_model.translate(cfm_to_translate,source=src, target=tgt)
+            cfm_translated = self.mt_model.translate(cfm_to_translate,source=src, target=tgt)
+            self.confirmed_translation += cfm_translated
+            self.screen.send_text(cfm_translated, tgt_speakerid, is_translation=True, is_confirmed=True)
 
         if len(uncfm_to_translate) > 0:
             self.unconfirmed_translation = self.mt_model.translate(uncfm_to_translate,source=src, target=tgt)
+            self.screen.send_text(self.unconfirmed_translation, tgt_speakerid, is_translation=True, is_confirmed=False)
 
         logger.debug(' MT TEXT: ' + text)
         logger.debug(' MT SENT: ' + str(sentences))
@@ -136,17 +146,29 @@ class CascadePipeline(TranscriptHandler):
         src = self.asr.get_last_language()
             
         try:
-            lang_idx = self.languages.index(src)
-            tgt = self.languages[1-lang_idx]
+            src_speakerid = self.languages.index(src)
+            tgt_speakerid = 1 - src_speakerid
+            tgt = self.languages[tgt_speakerid]
 
-            self.last_confirmed_transcription_timestamp = end_timestamp
-            self.process_transcribed(transcript, src)
-            self.process_translation(transcript, src, tgt)
+            if end_timestamp is not None:
+                self.last_confirmed_transcription_timestamp = max(self.last_confirmed_transcription_timestamp, end_timestamp)
+            self.process_transcribed(transcript, src, src_speakerid)
+            self.process_translation(transcript, src, tgt, tgt_speakerid)
 
             self.last_transcribed_lang = src
         except ValueError:
             logger.debug(f"skipping different language {src}")
         logger.debug('=====================')
+
+    def handle_silence(self):
+        if self.last_transcribed_lang is None:
+            return
+
+        lang_idx = self.languages.index(self.last_transcribed_lang)
+        tgt = self.languages[1-lang_idx]
+
+        self.tts_model.synthesize(self.confirmed_translation + self.unconfirmed_translation, tgt)
+        self.finish()
 
     def finish(self):
         if self.last_transcribed_lang is None:
@@ -167,17 +189,18 @@ if __name__ == '__main__':
     from mic import AudioCapture
     pipeline = CascadePipeline(languages=['en', 'hi'])
 
-    runner = Runner(pipeline)
+    runner = Runner(pipeline, silence_time=1)
     runner.init(create_args().parse_args())
     audio_device = AudioCapture(output_audio=lambda a: runner.online.insert_audio_chunk(a))
 
     try:
         audio_device.start()
         while True:
-            runner.online.process_iter()
+            runner.process_iter()
     except KeyboardInterrupt:
         audio_device.stop()
-        pipeline.finish()
+
+    pipeline.finish()
 
     print(pipeline.transcription_history)
     print(pipeline.translation_history)
