@@ -2,7 +2,7 @@ from asr import Runner, logger, TranscriptHandler, create_args
 from asr import create_tokenizer, VACOnlineASRProcessor, OnlineASRProcessor
 from uart import Screen
 
-from mt import Nllb200
+from mt import Nllb200Int8
 from tts import Tts
 
 class CascadePipeline(TranscriptHandler):
@@ -17,7 +17,7 @@ class CascadePipeline(TranscriptHandler):
     def __init__(self, languages: list[str], translation_setting = 2, device='cuda'):
         super().__init__()
         self.languages = languages
-        self.mt_model = Nllb200(device=device)
+        self.mt_model = Nllb200Int8(device=device)
         self.tts_model = Tts(device=device)
         self.translation_setting = translation_setting
 
@@ -157,6 +157,8 @@ class CascadePipeline(TranscriptHandler):
 
             self.last_transcribed_lang = src
         except ValueError:
+            logger.debug(f"skipping different language {src}")
+        except IndexError:
             logger.debug(f"skipping different language {src}")
         logger.debug('=====================')
 

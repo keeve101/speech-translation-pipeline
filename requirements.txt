@@ -1,0 +1,15 @@
+evaluate
+pyserial
+pypinyin 
+librosa 
+uroman 
+soundfile 
+faster-whisper 
+transformers 
+torch 
+torchaudio 
+wtpsplit 
+more_itertools
+jiwer
+sacrebleu
+onnxruntime-gpu

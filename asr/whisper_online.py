@@ -306,7 +306,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         from .silero_vad_iterator import FixedVADIterator, OnnxWrapper
 
         # VAC:
-        model = OnnxWrapper(STORAGE_DIR_MODEL + '/silero-vad/model.onnx')
+        model = OnnxWrapper("/kaggle/input/silero-vad/other/default/1/silero-vad")
         self.vac = FixedVADIterator(model)  # we use the default options there: 500ms silence, 100ms padding, etc.  
 
         self.logfile = self.online.logfile
@@ -421,7 +421,7 @@ def add_shared_args(parser):
     parser.add_argument('--lan', '--language', type=str, default='auto', help="Source language code, e.g. en,de,cs, or 'auto' for language detection.")
     parser.add_argument('--task', type=str, default='transcribe', choices=["transcribe","translate"],help="Transcribe or translate.")
     parser.add_argument('--backend', type=str, default="faster-whisper", choices=["faster-whisper", "whisper_timestamped", "mlx-whisper", "openai-api"],help='Load only this backend for Whisper processing.')
-    parser.add_argument('--vac', action="store_true", const=True, help='Use VAC = voice activity controller. Recommended.')
+    parser.add_argument('--vac', action="store_true", help='Use VAC = voice activity controller. Recommended.')
     parser.add_argument('--vac-chunk-size', type=float, default=0.04, help='VAC sample size in seconds.')
     parser.add_argument('--vad', action="store_true", default=False, help='Use VAD = voice activity detection, with the default parameters.')
     parser.add_argument('--buffer_trimming', type=str, default="segment", choices=["sentence", "segment"],help='Buffer trimming strategy -- trim completed sentences marked with punctuation mark and detected by sentence segmenter, or the completed segments returned by Whisper. Sentence segmenter must be installed for "sentence" option.')
